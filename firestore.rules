@@ -1,0 +1,394 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny all reads and writes unless explicitly matched
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() &&
+        'email' in request.auth.token &&
+        request.auth.token.email == 'ariacahya8@gmail.com' &&
+        'email_verified' in request.auth.token &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isWorkspaceMember(workspaceId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.memberUids;
+    }
+
+    function isWorkspaceAdmin(workspaceId) {
+      return isBootstrappedAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.adminUids
+      );
+    }
+
+    function isValidMemberList(members) {
+      return members is list &&
+        members.size() >= 1 &&
+        members.size() <= 50 &&
+        members[0] is string;
+    }
+
+    function isValidAdminList(admins) {
+      return admins is list &&
+        admins.size() >= 1 &&
+        admins.size() <= 20 &&
+        admins[0] is string;
+    }
+
+    function isValidTimestampsOnCreate(data) {
+      return data.createdAt is timestamp &&
+        data.createdAt <= request.time &&
+        data.updatedAt is timestamp &&
+        data.updatedAt <= request.time;
+    }
+
+    function isValidTimestampsOnUpdate(data) {
+      return data.createdAt == existing().createdAt &&
+        data.updatedAt is timestamp &&
+        data.updatedAt <= request.time;
+    }
+
+    // --- Entity Validation Helpers ---
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 120)) &&
+        data.activeRole in ['ADMIN', 'GUDANG'] &&
+        data.activeWorkspaceId is string && data.activeWorkspaceId.size() >= 1 && data.activeWorkspaceId.size() <= 128;
+    }
+
+    function isValidWorkspace(data) {
+      return data.name is string && data.name.size() >= 2 && data.name.size() <= 80 &&
+        data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 24 &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+        isValidMemberList(data.memberUids) &&
+        isValidAdminList(data.adminUids) &&
+        (!('lastJoinCode' in data) || data.lastJoinCode == null || (data.lastJoinCode is string && data.lastJoinCode.size() <= 24)) &&
+        (!('jubelioEmail' in data) || data.jubelioEmail == null || (data.jubelioEmail is string && data.jubelioEmail.size() <= 120)) &&
+        data.jubelioConnected is bool &&
+        (!('lastJubelioSyncAt' in data) || data.lastJubelioSyncAt == null || data.lastJubelioSyncAt is timestamp);
+    }
+
+    function isValidWorkspaceInvite(data) {
+      return data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 24 &&
+        data.workspaceId is string && isValidId(data.workspaceId) &&
+        data.workspaceName is string && data.workspaceName.size() >= 2 && data.workspaceName.size() <= 80 &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128;
+    }
+
+    function isValidProduct(data) {
+      return data.workspaceId is string && isValidId(data.workspaceId) &&
+        data.sku is string && data.sku.size() >= 1 && data.sku.size() <= 64 &&
+        (!('jubelioItemId' in data) || data.jubelioItemId == null || data.jubelioItemId is int) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 140 &&
+        (!('category' in data) || data.category == null || (data.category is string && data.category.size() <= 60)) &&
+        data.rackLocation is string && data.rackLocation.size() >= 1 && data.rackLocation.size() <= 40 &&
+        data.systemStock is int && data.systemStock >= 0 && data.systemStock <= 10000000 &&
+        data.reservedStock is int && data.reservedStock >= 0 && data.reservedStock <= 10000000 &&
+        data.minThreshold is int && data.minThreshold >= 0 && data.minThreshold <= 1000000 &&
+        data.unitPrice is number && data.unitPrice >= 0 &&
+        data.syncStatus in ['SYNCED', 'PENDING_PUSH', 'CONFLICT', 'LOCAL_ONLY'] &&
+        (!('lastJubelioSyncAt' in data) || data.lastJubelioSyncAt == null || data.lastJubelioSyncAt is timestamp) &&
+        isValidMemberList(data.memberUids) &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128;
+    }
+
+    function isValidOpname(data) {
+      return data.workspaceId is string && isValidId(data.workspaceId) &&
+        data.rackLocation is string && data.rackLocation.size() >= 1 && data.rackLocation.size() <= 40 &&
+        data.performedByUid is string && data.performedByUid.size() >= 1 && data.performedByUid.size() <= 128 &&
+        data.performedByName is string && data.performedByName.size() >= 1 && data.performedByName.size() <= 80 &&
+        data.totalItemsCounted is int && data.totalItemsCounted >= 0 && data.totalItemsCounted <= 10000 &&
+        data.totalVariance is int && data.totalVariance >= -10000000 && data.totalVariance <= 10000000 &&
+        data.itemSummaries is list && data.itemSummaries.size() <= 50 &&
+        (data.itemSummaries.size() == 0 || data.itemSummaries[0] is string) &&
+        (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() <= 400)) &&
+        data.syncedToJubelio is bool &&
+        isValidMemberList(data.memberUids);
+    }
+
+    function isValidOrder(data) {
+      return data.workspaceId is string && isValidId(data.workspaceId) &&
+        data.orderNumber is string && data.orderNumber.size() >= 1 && data.orderNumber.size() <= 64 &&
+        (!('jubelioOrderId' in data) || data.jubelioOrderId == null || data.jubelioOrderId is int) &&
+        data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 100 &&
+        data.channel is string && data.channel.size() >= 1 && data.channel.size() <= 50 &&
+        data.items is list && data.items.size() >= 1 && data.items.size() <= 30 && data.items[0] is map &&
+        (!('adminInstruction' in data) || data.adminInstruction == null || (data.adminInstruction is string && data.adminInstruction.size() <= 500)) &&
+        data.status in ['MENUNGGU_ARAHAN', 'SIAP_DIKEMAS', 'DIKEMAS', 'SIAP_KIRIM', 'DIKIRIM', 'SELESAI'] &&
+        (!('courier' in data) || data.courier == null || (data.courier is string && data.courier.size() <= 60)) &&
+        (!('trackingNumber' in data) || data.trackingNumber == null || (data.trackingNumber is string && data.trackingNumber.size() <= 80)) &&
+        data.totalAmount is number && data.totalAmount >= 0 &&
+        data.timelineEvents is list && data.timelineEvents.size() <= 20 &&
+        (data.timelineEvents.size() == 0 || data.timelineEvents[0] is string) &&
+        data.assignedByUid is string && data.assignedByUid.size() >= 1 && data.assignedByUid.size() <= 128 &&
+        isValidMemberList(data.memberUids);
+    }
+
+    function isValidAlert(data) {
+      return data.workspaceId is string && isValidId(data.workspaceId) &&
+        data.targetRole in ['ADMIN', 'GUDANG', 'ALL'] &&
+        data.type in ['LOW_STOCK', 'NEW_ORDER_INSTRUCTION', 'SYNC_ALERT'] &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 400 &&
+        (!('referenceId' in data) || data.referenceId == null || (data.referenceId is string && data.referenceId.size() <= 128)) &&
+        data.isRead is bool &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        isValidMemberList(data.memberUids);
+    }
+
+    function isValidSyncLog(data) {
+      return data.workspaceId is string && isValidId(data.workspaceId) &&
+        data.direction in ['PULL_JUBELIO', 'PUSH_JUBELIO', 'TWO_WAY'] &&
+        data.status in ['SUCCESS', 'PARTIAL', 'ERROR'] &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 400 &&
+        data.itemsSynced is int && data.itemsSynced >= 0 && data.itemsSynced <= 1000000 &&
+        data.discrepanciesFound is int && data.discrepanciesFound >= 0 && data.discrepanciesFound <= 1000000 &&
+        data.performedByUid is string && data.performedByUid.size() >= 1 && data.performedByUid.size() <= 128 &&
+        isValidMemberList(data.memberUids);
+    }
+
+    // --- Collection Rules ---
+
+    // 1. User Profiles (PII-isolated per user)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        incoming().userId == request.auth.uid &&
+        incoming().keys().hasAll(['userId', 'displayName', 'activeRole', 'activeWorkspaceId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['userId', 'displayName', 'email', 'activeRole', 'activeWorkspaceId', 'createdAt', 'updatedAt']) &&
+        isValidUserProfile(incoming()) &&
+        isValidTimestampsOnCreate(incoming());
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        incoming().userId == existing().userId &&
+        isValidUserProfile(incoming()) &&
+        isValidTimestampsOnUpdate(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'activeRole', 'activeWorkspaceId', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // 2. Workspace Invite Codes (Get by exact code only, no listing)
+    match /workspace_invites/{inviteCode} {
+      allow get: if isSignedIn() && isValidId(inviteCode);
+      allow list: if false;
+      allow create: if isSignedIn() &&
+        isValidId(inviteCode) &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().inviteCode == inviteCode &&
+        incoming().keys().hasAll(['inviteCode', 'workspaceId', 'workspaceName', 'ownerId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['inviteCode', 'workspaceId', 'workspaceName', 'ownerId', 'createdAt', 'updatedAt']) &&
+        isValidWorkspaceInvite(incoming()) &&
+        isValidTimestampsOnCreate(incoming());
+      allow update: if isSignedIn() &&
+        isValidId(inviteCode) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        isValidWorkspaceInvite(incoming()) &&
+        isValidTimestampsOnUpdate(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['workspaceName', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(inviteCode) && existing().ownerId == request.auth.uid;
+    }
+
+    // 3. Workspaces
+    match /workspaces/{workspaceId} {
+      allow get: if isSignedIn() && isValidId(workspaceId) && request.auth.uid in existing().memberUids;
+      allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
+      allow create: if isSignedIn() &&
+        isValidId(workspaceId) &&
+        incoming().ownerId == request.auth.uid &&
+        request.auth.uid in incoming().memberUids &&
+        request.auth.uid in incoming().adminUids &&
+        incoming().keys().hasAll(['name', 'inviteCode', 'ownerId', 'memberUids', 'adminUids', 'jubelioConnected', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['name', 'inviteCode', 'ownerId', 'memberUids', 'adminUids', 'lastJoinCode', 'jubelioEmail', 'jubelioConnected', 'lastJubelioSyncAt', 'createdAt', 'updatedAt']) &&
+        isValidWorkspace(incoming()) &&
+        isValidTimestampsOnCreate(incoming());
+      allow update: if isSignedIn() &&
+        isValidId(workspaceId) &&
+        isValidWorkspace(incoming()) &&
+        isValidTimestampsOnUpdate(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        (
+          (
+            (request.auth.uid in existing().adminUids || isBootstrappedAdmin()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'inviteCode', 'memberUids', 'adminUids', 'jubelioEmail', 'jubelioConnected', 'lastJubelioSyncAt', 'updatedAt'])
+          ) ||
+          (
+            !(request.auth.uid in existing().memberUids) &&
+            incoming().lastJoinCode == existing().inviteCode &&
+            incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+            incoming().memberUids.hasAll(existing().memberUids) &&
+            request.auth.uid in incoming().memberUids &&
+            incoming().adminUids == existing().adminUids &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'lastJoinCode', 'updatedAt'])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(workspaceId) && existing().ownerId == request.auth.uid;
+
+      // 3a. Products (Warehouse Inventory)
+      match /products/{productId} {
+        allow get: if isSignedIn() && isValidId(workspaceId) && isValidId(productId) && request.auth.uid in existing().memberUids;
+        allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
+        allow create: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(productId) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().createdByUid == request.auth.uid &&
+          request.auth.uid in incoming().memberUids &&
+          incoming().keys().hasAll(['workspaceId', 'sku', 'name', 'rackLocation', 'systemStock', 'reservedStock', 'minThreshold', 'unitPrice', 'syncStatus', 'memberUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['workspaceId', 'sku', 'jubelioItemId', 'name', 'category', 'rackLocation', 'systemStock', 'reservedStock', 'minThreshold', 'unitPrice', 'syncStatus', 'lastJubelioSyncAt', 'memberUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+          isValidProduct(incoming()) &&
+          isValidTimestampsOnCreate(incoming()) &&
+          isWorkspaceMember(workspaceId);
+        allow update: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(productId) &&
+          request.auth.uid in existing().memberUids &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().createdByUid == existing().createdByUid &&
+          isValidProduct(incoming()) &&
+          isValidTimestampsOnUpdate(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['sku', 'jubelioItemId', 'name', 'category', 'rackLocation', 'systemStock', 'reservedStock', 'minThreshold', 'unitPrice', 'syncStatus', 'lastJubelioSyncAt', 'memberUids', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(workspaceId) && isValidId(productId) && request.auth.uid in existing().memberUids && isWorkspaceAdmin(workspaceId);
+      }
+
+      // 3b. Stock Opname Records
+      match /opnames/{opnameId} {
+        allow get: if isSignedIn() && isValidId(workspaceId) && isValidId(opnameId) && request.auth.uid in existing().memberUids;
+        allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
+        allow create: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(opnameId) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().performedByUid == request.auth.uid &&
+          request.auth.uid in incoming().memberUids &&
+          incoming().keys().hasAll(['workspaceId', 'rackLocation', 'performedByUid', 'performedByName', 'totalItemsCounted', 'totalVariance', 'itemSummaries', 'syncedToJubelio', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['workspaceId', 'rackLocation', 'performedByUid', 'performedByName', 'totalItemsCounted', 'totalVariance', 'itemSummaries', 'notes', 'syncedToJubelio', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isValidOpname(incoming()) &&
+          isValidTimestampsOnCreate(incoming()) &&
+          isWorkspaceMember(workspaceId);
+        allow update: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(opnameId) &&
+          request.auth.uid in existing().memberUids &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().performedByUid == existing().performedByUid &&
+          isValidOpname(incoming()) &&
+          isValidTimestampsOnUpdate(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['syncedToJubelio', 'notes', 'memberUids', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      // 3c. Order Instructions & Fulfillment Tracking
+      match /orders/{orderId} {
+        allow get: if isSignedIn() && isValidId(workspaceId) && isValidId(orderId) && request.auth.uid in existing().memberUids;
+        allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
+        allow create: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(orderId) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().assignedByUid == request.auth.uid &&
+          request.auth.uid in incoming().memberUids &&
+          incoming().keys().hasAll(['workspaceId', 'orderNumber', 'customerName', 'channel', 'items', 'status', 'totalAmount', 'timelineEvents', 'assignedByUid', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['workspaceId', 'orderNumber', 'jubelioOrderId', 'customerName', 'channel', 'items', 'adminInstruction', 'status', 'courier', 'trackingNumber', 'totalAmount', 'timelineEvents', 'assignedByUid', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isValidOrder(incoming()) &&
+          isValidTimestampsOnCreate(incoming()) &&
+          isWorkspaceMember(workspaceId);
+        allow update: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(orderId) &&
+          request.auth.uid in existing().memberUids &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().assignedByUid == existing().assignedByUid &&
+          (existing().status != 'SELESAI' || isWorkspaceAdmin(workspaceId)) &&
+          isValidOrder(incoming()) &&
+          isValidTimestampsOnUpdate(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['items', 'adminInstruction', 'status', 'courier', 'trackingNumber', 'timelineEvents', 'jubelioOrderId', 'memberUids', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(workspaceId) && isValidId(orderId) && request.auth.uid in existing().memberUids && isWorkspaceAdmin(workspaceId);
+      }
+
+      // 3d. Automatic Alerts (Low Stock, New Order Instruction, Sync)
+      match /alerts/{alertId} {
+        allow get: if isSignedIn() && isValidId(workspaceId) && isValidId(alertId) && request.auth.uid in existing().memberUids;
+        allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
+        allow create: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(alertId) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().createdByUid == request.auth.uid &&
+          request.auth.uid in incoming().memberUids &&
+          incoming().keys().hasAll(['workspaceId', 'targetRole', 'type', 'title', 'message', 'isRead', 'createdByUid', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['workspaceId', 'targetRole', 'type', 'title', 'message', 'referenceId', 'isRead', 'createdByUid', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isValidAlert(incoming()) &&
+          isValidTimestampsOnCreate(incoming()) &&
+          isWorkspaceMember(workspaceId);
+        allow update: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(alertId) &&
+          request.auth.uid in existing().memberUids &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().createdByUid == existing().createdByUid &&
+          isValidAlert(incoming()) &&
+          isValidTimestampsOnUpdate(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'memberUids', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(workspaceId) && isValidId(alertId) && request.auth.uid in existing().memberUids;
+      }
+
+      // 3e. Jubelio Sync Logs
+      match /syncLogs/{logId} {
+        allow get: if isSignedIn() && isValidId(workspaceId) && isValidId(logId) && request.auth.uid in existing().memberUids;
+        allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
+        allow create: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(logId) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().performedByUid == request.auth.uid &&
+          request.auth.uid in incoming().memberUids &&
+          incoming().keys().hasAll(['workspaceId', 'direction', 'status', 'summary', 'itemsSynced', 'discrepanciesFound', 'performedByUid', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['workspaceId', 'direction', 'status', 'summary', 'itemsSynced', 'discrepanciesFound', 'performedByUid', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isValidSyncLog(incoming()) &&
+          isValidTimestampsOnCreate(incoming()) &&
+          isWorkspaceMember(workspaceId);
+        allow update: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(logId) &&
+          request.auth.uid in existing().memberUids &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().performedByUid == existing().performedByUid &&
+          isValidSyncLog(incoming()) &&
+          isValidTimestampsOnUpdate(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt']);
+        allow delete: if false;
+      }
+    }
+  }
+}

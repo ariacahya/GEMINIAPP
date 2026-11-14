@@ -1,0 +1,191 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile storing role mode preference and active warehouse workspace.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the user." },
+        "displayName": { "type": "string", "description": "Display name of the warehouse staff or admin." },
+        "email": { "type": "string", "description": "Private Google account email." },
+        "activeRole": { "type": "string", "enum": ["ADMIN", "GUDANG"], "description": "Active operational role in the app." },
+        "activeWorkspaceId": { "type": "string", "description": "Currently selected warehouse workspace ID." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": ["userId", "displayName", "activeRole", "activeWorkspaceId", "createdAt", "updatedAt"]
+    },
+    "Workspace": {
+      "title": "Workspace",
+      "description": "Shared warehouse workspace linking Admin and Gudang members with Jubelio sync metadata.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Warehouse name." },
+        "inviteCode": { "type": "string", "description": "Alphanumeric code for joining this warehouse team." },
+        "ownerId": { "type": "string", "description": "UID of the workspace creator." },
+        "memberUids": { "type": "array", "description": "Bounded list of member UIDs (max 50)." },
+        "adminUids": { "type": "array", "description": "Bounded list of admin UIDs (max 20)." },
+        "lastJoinCode": { "type": "string", "description": "Invite code provided on member join." },
+        "jubelioEmail": { "type": "string", "description": "Connected Jubelio account email." },
+        "jubelioConnected": { "type": "boolean", "description": "Whether Jubelio REST API has been connected." },
+        "lastJubelioSyncAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last Jubelio sync." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": ["name", "inviteCode", "ownerId", "memberUids", "adminUids", "jubelioConnected", "createdAt", "updatedAt"]
+    },
+    "WorkspaceInvite": {
+      "title": "WorkspaceInvite",
+      "description": "Invite lookup document mapping inviteCode to workspaceId.",
+      "type": "object",
+      "properties": {
+        "inviteCode": { "type": "string" },
+        "workspaceId": { "type": "string" },
+        "workspaceName": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["inviteCode", "workspaceId", "workspaceName", "ownerId", "createdAt", "updatedAt"]
+    },
+    "WarehouseProduct": {
+      "title": "WarehouseProduct",
+      "description": "SKU inventory record stored per rack location and synced with Jubelio.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "sku": { "type": "string" },
+        "jubelioItemId": { "type": "integer" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "rackLocation": { "type": "string" },
+        "systemStock": { "type": "integer" },
+        "reservedStock": { "type": "integer" },
+        "minThreshold": { "type": "integer" },
+        "unitPrice": { "type": "number" },
+        "syncStatus": { "type": "string", "enum": ["SYNCED", "PENDING_PUSH", "CONFLICT", "LOCAL_ONLY"] },
+        "lastJubelioSyncAt": { "type": "string", "format": "date-time" },
+        "memberUids": { "type": "array" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "sku", "name", "rackLocation", "systemStock", "reservedStock", "minThreshold", "unitPrice", "syncStatus", "memberUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "StockOpnameRecord": {
+      "title": "StockOpnameRecord",
+      "description": "Immutable rack-by-rack stock opname audit log.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "rackLocation": { "type": "string" },
+        "performedByUid": { "type": "string" },
+        "performedByName": { "type": "string" },
+        "totalItemsCounted": { "type": "integer" },
+        "totalVariance": { "type": "integer" },
+        "itemSummaries": { "type": "array" },
+        "notes": { "type": "string" },
+        "syncedToJubelio": { "type": "boolean" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "rackLocation", "performedByUid", "performedByName", "totalItemsCounted", "totalVariance", "itemSummaries", "syncedToJubelio", "memberUids", "createdAt", "updatedAt"]
+    },
+    "OrderInstruction": {
+      "title": "OrderInstruction",
+      "description": "Order dispatched by Admin to Warehouse staff with end-to-end fulfillment tracking.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "orderNumber": { "type": "string" },
+        "jubelioOrderId": { "type": "integer" },
+        "customerName": { "type": "string" },
+        "channel": { "type": "string" },
+        "items": { "type": "array" },
+        "adminInstruction": { "type": "string" },
+        "status": { "type": "string", "enum": ["MENUNGGU_ARAHAN", "SIAP_DIKEMAS", "DIKEMAS", "SIAP_KIRIM", "DIKIRIM", "SELESAI"] },
+        "courier": { "type": "string" },
+        "trackingNumber": { "type": "string" },
+        "totalAmount": { "type": "number" },
+        "timelineEvents": { "type": "array" },
+        "assignedByUid": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "orderNumber", "customerName", "channel", "items", "status", "totalAmount", "timelineEvents", "assignedByUid", "memberUids", "createdAt", "updatedAt"]
+    },
+    "AlertNotification": {
+      "title": "AlertNotification",
+      "description": "Automatic notifications for low stock thresholds, new order instructions, and Jubelio sync events.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "targetRole": { "type": "string", "enum": ["ADMIN", "GUDANG", "ALL"] },
+        "type": { "type": "string", "enum": ["LOW_STOCK", "NEW_ORDER_INSTRUCTION", "SYNC_ALERT"] },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "referenceId": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdByUid": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "targetRole", "type", "title", "message", "isRead", "createdByUid", "memberUids", "createdAt", "updatedAt"]
+    },
+    "SyncLogEntry": {
+      "title": "SyncLogEntry",
+      "description": "Audit log of Jubelio synchronization runs and discrepancy checks.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "direction": { "type": "string", "enum": ["PULL_JUBELIO", "PUSH_JUBELIO", "TWO_WAY"] },
+        "status": { "type": "string", "enum": ["SUCCESS", "PARTIAL", "ERROR"] },
+        "summary": { "type": "string" },
+        "itemsSynced": { "type": "integer" },
+        "discrepanciesFound": { "type": "integer" },
+        "performedByUid": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "direction", "status", "summary", "itemsSynced", "discrepanciesFound", "performedByUid", "memberUids", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Per-user private profile and active role configuration."
+    },
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "Warehouse workspace documents."
+    },
+    "/workspace_invites/{inviteCode}": {
+      "schema": { "$ref": "#/entities/WorkspaceInvite" },
+      "description": "Direct-get invite code lookup table for team onboarding."
+    },
+    "/workspaces/{workspaceId}/products/{productId}": {
+      "schema": { "$ref": "#/entities/WarehouseProduct" },
+      "description": "Real-time warehouse SKU inventory per rack."
+    },
+    "/workspaces/{workspaceId}/opnames/{opnameId}": {
+      "schema": { "$ref": "#/entities/StockOpnameRecord" },
+      "description": "Rack-level physical stock opname records."
+    },
+    "/workspaces/{workspaceId}/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/OrderInstruction" },
+      "description": "Order instructions, fulfillment checklists, and tracking timeline."
+    },
+    "/workspaces/{workspaceId}/alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/AlertNotification" },
+      "description": "Automated low-stock and order instruction alerts."
+    },
+    "/workspaces/{workspaceId}/syncLogs/{logId}": {
+      "schema": { "$ref": "#/entities/SyncLogEntry" },
+      "description": "Jubelio REST API sync audit trail."
+    }
+  }
+}

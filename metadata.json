@@ -1,0 +1,6 @@
+{
+  "name": "GudangSync",
+  "description": "Aplikasi manajemen stok gudang real-time, stok opname per rak, alur arahan & pelacakan pesanan, notifikasi stok minimum, analitik penjualan, dan integrasi REST API Jubelio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

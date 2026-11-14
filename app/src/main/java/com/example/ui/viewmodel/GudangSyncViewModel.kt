@@ -15,12 +15,14 @@ import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
 import com.example.data.model.WarehouseProduct
 import com.example.data.model.Workspace
+import com.example.data.remote.DEFAULT_JUBELIO_BASE_URL
 import com.example.data.remote.JubelioApiClient
 import com.example.data.remote.JubelioSessionState
 import com.example.data.remote.JubelioSessionStore
 import com.example.data.remote.JubelioStockAdjustmentItem
 import com.example.data.remote.JubelioTokenExpiredException
 import com.example.data.remote.SyncConflictPolicy
+import com.example.data.remote.normalizeJubelioBaseUrl
 import com.example.data.repository.WarehouseRepository
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
@@ -251,7 +253,9 @@ class GudangSyncViewModel(
                             qty = newQty,
                             note = "Quick adjust (${if (delta > 0) "+$delta" else "$delta"})"
                         )
-                    )
+                    ),
+                    baseUrl = session.baseUrl,
+                    preferRawAuth = session.useRawAuthHeader
                 ).isSuccess
             }
             repository.adjustProductStock(ws, product, delta, pushedOk)
@@ -288,7 +292,9 @@ class GudangSyncViewModel(
                         token = session.token,
                         dateIso = todayIso(),
                         note = "Stok Opname Rak $rackLocation: $notes",
-                        items = adjItems
+                        items = adjItems,
+                        baseUrl = session.baseUrl,
+                        preferRawAuth = session.useRawAuthHeader
                     )
                     jubelioSynced = pushResult.isSuccess
                     pushResult.exceptionOrNull()?.let { err ->
@@ -392,7 +398,9 @@ class GudangSyncViewModel(
                     jubelioOrderId = order.jubelioOrderId,
                     status = nextStatus.name,
                     courier = courier,
-                    trackingNumber = trackingNumber
+                    trackingNumber = trackingNumber,
+                    baseUrl = session.baseUrl,
+                    preferRawAuth = session.useRawAuthHeader
                 ).isSuccess
             }
             repository.advanceOrderStatus(
@@ -412,34 +420,95 @@ class GudangSyncViewModel(
         }
     }
 
-    fun loginJubelio(emailInput: String, passwordInput: String) {
-        val ws = workspace.value ?: return
+    fun loginJubelio(
+        emailInput: String,
+        passwordInput: String,
+        baseUrlInput: String = DEFAULT_JUBELIO_BASE_URL
+    ) {
+        val ws = workspace.value
+        val normalizedUrl = normalizeJubelioBaseUrl(baseUrlInput)
         viewModelScope.launch {
             _isJubelioSyncing.value = true
-            jubelioApi.login(emailInput, passwordInput)
-                .onSuccess { token ->
-                    sessionStore.saveSession(emailInput.trim(), token)
-                    repository.updateWorkspaceJubelioStatus(ws.id, emailInput.trim(), true)
-                    _toastEvents.tryEmit("Login Jubelio berhasil! Memulai sinkronisasi...")
-                    syncWithJubelioNowInternal(ws, token, sessionStore = sessionStore)
+            jubelioApi.login(emailInput, passwordInput, normalizedUrl)
+                .onSuccess { loginResult ->
+                    val cleanEmail = emailInput.trim()
+                    sessionStore.saveSession(
+                        email = cleanEmail,
+                        token = loginResult.token,
+                        baseUrl = loginResult.resolvedBaseUrl,
+                        useRawAuthHeader = false
+                    )
+                    if (ws != null) {
+                        repository.updateWorkspaceJubelioStatus(ws.id, cleanEmail, true)
+                    }
+                    _toastEvents.tryEmit("Login Jubelio berhasil! Mengambil data stok...")
+                    syncWithJubelioNowInternal(
+                        ws = ws,
+                        token = loginResult.token,
+                        baseUrl = loginResult.resolvedBaseUrl,
+                        preferRawAuth = false,
+                        sessionStore = sessionStore
+                    )
                 }
                 .onFailure { err ->
-                    repository.recordSyncLog(
-                        workspace = ws,
-                        direction = "TWO_WAY",
-                        status = "ERROR",
-                        summary = err.message ?: "Gagal login ke API Jubelio",
-                        itemsSynced = 0L,
-                        discrepanciesFound = 0L
-                    )
-                    _toastEvents.tryEmit(err.message ?: "Login Jubelio gagal")
+                    val errMsg = err.message ?: "Gagal login ke API Jubelio"
+                    sessionStore.recordError(errMsg)
+                    if (ws != null) {
+                        repository.recordSyncLog(
+                            workspace = ws,
+                            direction = "TWO_WAY",
+                            status = "ERROR",
+                            summary = errMsg,
+                            itemsSynced = 0L,
+                            discrepanciesFound = 0L
+                        )
+                    }
+                    _toastEvents.tryEmit(errMsg)
                 }
             _isJubelioSyncing.value = false
         }
     }
 
+    fun connectWithManualToken(
+        tokenInput: String,
+        baseUrlInput: String = DEFAULT_JUBELIO_BASE_URL
+    ) {
+        val cleanToken = tokenInput.trim()
+            .removePrefix("Bearer ")
+            .removePrefix("bearer ")
+            .trim()
+        if (cleanToken.isBlank()) {
+            _toastEvents.tryEmit("Tempelkan token API Jubelio terlebih dahulu.")
+            return
+        }
+        val ws = workspace.value
+        val normalizedUrl = normalizeJubelioBaseUrl(baseUrlInput)
+        val labelEmail = jubelioSession.value.email.ifBlank { email ?: "Token API Manual" }
+        viewModelScope.launch {
+            _isJubelioSyncing.value = true
+            sessionStore.saveSession(
+                email = labelEmail,
+                token = cleanToken,
+                baseUrl = normalizedUrl,
+                useRawAuthHeader = false
+            )
+            if (ws != null) {
+                repository.updateWorkspaceJubelioStatus(ws.id, labelEmail, true)
+            }
+            _toastEvents.tryEmit("Token disimpan! Menguji koneksi ke Jubelio...")
+            syncWithJubelioNowInternal(
+                ws = ws,
+                token = cleanToken,
+                baseUrl = normalizedUrl,
+                preferRawAuth = false,
+                sessionStore = sessionStore
+            )
+            _isJubelioSyncing.value = false
+        }
+    }
+
     fun syncWithJubelioNow() {
-        val ws = workspace.value ?: return
+        val ws = workspace.value
         val session = jubelioSession.value
         if (!session.isConnected) {
             _toastEvents.tryEmit("Silakan login akun Jubelio terlebih dahulu.")
@@ -447,21 +516,51 @@ class GudangSyncViewModel(
         }
         viewModelScope.launch {
             _isJubelioSyncing.value = true
-            syncWithJubelioNowInternal(ws, session.token, sessionStore = sessionStore)
+            syncWithJubelioNowInternal(
+                ws = ws,
+                token = session.token,
+                baseUrl = session.baseUrl,
+                preferRawAuth = session.useRawAuthHeader,
+                sessionStore = sessionStore
+            )
             _isJubelioSyncing.value = false
         }
     }
 
     private suspend fun syncWithJubelioNowInternal(
-        ws: Workspace,
+        ws: Workspace?,
         token: String,
+        baseUrl: String,
+        preferRawAuth: Boolean,
         sessionStore: JubelioSessionStore
     ) {
         try {
-            val invRes = jubelioApi.fetchInventory(token)
-            val ordRes = jubelioApi.fetchSalesOrders(token)
-            val remoteProducts = invRes.getOrThrow()
-            val remoteOrders = ordRes.getOrElse { emptyList() }
+            val invRes = jubelioApi.fetchInventory(
+                token = token,
+                baseUrl = baseUrl,
+                preferRawAuth = preferRawAuth
+            ).getOrThrow()
+
+            val effectiveRawAuth = invRes.usedRawAuthHeader
+            if (effectiveRawAuth != preferRawAuth) {
+                sessionStore.updateAuthHeaderMode(effectiveRawAuth)
+            }
+
+            val ordRes = jubelioApi.fetchSalesOrders(
+                token = token,
+                baseUrl = baseUrl,
+                preferRawAuth = effectiveRawAuth
+            )
+            val remoteProducts = invRes.data
+            val remoteOrders = ordRes.getOrNull()?.data.orEmpty()
+
+            if (ws == null) {
+                val summary = "Login berhasil (${remoteProducts.size} produk ditemukan). Workspace sedang dimuat."
+                sessionStore.updateLastSyncMessage(summary)
+                _toastEvents.tryEmit(summary)
+                return
+            }
+
             val localProducts = (productsState.value as? UiState.Success)?.data.orEmpty()
             val localOrders = (ordersState.value as? UiState.Success)?.data.orEmpty()
 
@@ -483,7 +582,9 @@ class GudangSyncViewModel(
                         token = token,
                         dateIso = todayIso(),
                         note = "Sinkronisasi stok gudang ke Jubelio",
-                        items = pendingPush
+                        items = pendingPush,
+                        baseUrl = baseUrl,
+                        preferRawAuth = effectiveRawAuth
                     )
                 }
             }
@@ -501,18 +602,25 @@ class GudangSyncViewModel(
                 repository.updateWorkspaceJubelioStatus(ws.id, jubelioSession.value.email, true)
                 _toastEvents.tryEmit(summary)
             }.onFailure { err ->
-                _toastEvents.tryEmit(err.message ?: "Gagal menyimpan hasil sinkronisasi")
+                val errMsg = err.message ?: "Gagal menyimpan hasil sinkronisasi"
+                sessionStore.recordError(errMsg)
+                _toastEvents.tryEmit(errMsg)
             }
         } catch (e: JubelioTokenExpiredException) {
             sessionStore.clearSession()
-            repository.updateWorkspaceJubelioStatus(ws.id, null, false)
-            repository.recordSyncLog(ws, "TWO_WAY", "ERROR", e.message ?: "Token kedaluwarsa", 0L, 0L)
+            sessionStore.recordError(e.message ?: "Token Jubelio ditolak atau kedaluwarsa")
+            if (ws != null) {
+                repository.updateWorkspaceJubelioStatus(ws.id, null, false)
+                repository.recordSyncLog(ws, "TWO_WAY", "ERROR", e.message ?: "Token kedaluwarsa", 0L, 0L)
+            }
             _toastEvents.tryEmit(e.message ?: "Token Jubelio kedaluwarsa")
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             val msg = e.message ?: "Gagal sinkronisasi dengan Jubelio"
-            sessionStore.updateLastSyncMessage(msg)
-            repository.recordSyncLog(ws, "TWO_WAY", "ERROR", msg, 0L, 0L)
+            sessionStore.recordError(msg)
+            if (ws != null) {
+                repository.recordSyncLog(ws, "TWO_WAY", "ERROR", msg, 0L, 0L)
+            }
             _toastEvents.tryEmit(msg)
         }
     }
@@ -522,11 +630,14 @@ class GudangSyncViewModel(
         ws: Workspace,
         items: List<JubelioStockAdjustmentItem>
     ) {
+        val session = jubelioSession.value
         jubelioApi.pushStockAdjustment(
             token = token,
             dateIso = todayIso(),
             note = "Sinkronisasi GudangSync",
-            items = items
+            items = items,
+            baseUrl = session.baseUrl,
+            preferRawAuth = session.useRawAuthHeader
         ).onFailure { err ->
             if (err is JubelioTokenExpiredException) {
                 sessionStore.clearSession()
@@ -543,10 +654,12 @@ class GudangSyncViewModel(
     }
 
     fun disconnectJubelio() {
-        val ws = workspace.value ?: return
+        val ws = workspace.value
         viewModelScope.launch {
             sessionStore.clearSession()
-            repository.updateWorkspaceJubelioStatus(ws.id, null, false)
+            if (ws != null) {
+                repository.updateWorkspaceJubelioStatus(ws.id, null, false)
+            }
             _toastEvents.tryEmit("Koneksi akun Jubelio diputuskan.")
         }
     }

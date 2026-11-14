@@ -18,9 +18,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -29,6 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -37,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -48,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AlertNotification
 import com.example.data.model.SyncLogEntry
@@ -55,6 +61,8 @@ import com.example.data.model.UiState
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
 import com.example.data.model.Workspace
+import com.example.data.remote.ALT_JUBELIO_BASE_URL
+import com.example.data.remote.DEFAULT_JUBELIO_BASE_URL
 import com.example.data.remote.JubelioSessionState
 import com.example.data.remote.SyncConflictPolicy
 import com.example.ui.components.EmptyStateCard
@@ -82,7 +90,8 @@ fun JubelioAndAlertsScreen(
     isJubelioSyncing: Boolean,
     isBusy: Boolean,
     onMarkAlertRead: (String) -> Unit,
-    onLoginJubelio: (String, String) -> Unit,
+    onLoginJubelio: (String, String, String) -> Unit,
+    onConnectManualToken: (String, String) -> Unit,
     onSyncJubelioNow: () -> Unit,
     onDisconnectJubelio: () -> Unit,
     onUpdateSyncPreferences: (Boolean, SyncConflictPolicy) -> Unit,
@@ -115,6 +124,7 @@ fun JubelioAndAlertsScreen(
                 syncLogs = (syncLogsState as? UiState.Success)?.data.orEmpty(),
                 isSyncing = isJubelioSyncing,
                 onLogin = onLoginJubelio,
+                onConnectManualToken = onConnectManualToken,
                 onSyncNow = onSyncJubelioNow,
                 onDisconnect = onDisconnectJubelio,
                 onUpdatePrefs = onUpdateSyncPreferences
@@ -254,13 +264,19 @@ private fun JubelioIntegrationTabContent(
     session: JubelioSessionState,
     syncLogs: List<SyncLogEntry>,
     isSyncing: Boolean,
-    onLogin: (String, String) -> Unit,
+    onLogin: (String, String, String) -> Unit,
+    onConnectManualToken: (String, String) -> Unit,
     onSyncNow: () -> Unit,
     onDisconnect: () -> Unit,
     onUpdatePrefs: (Boolean, SyncConflictPolicy) -> Unit
 ) {
     var emailInput by remember(session.email) { mutableStateOf(session.email) }
     var passwordInput by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var useManualToken by remember { mutableStateOf(false) }
+    var manualTokenInput by remember { mutableStateOf("") }
+    var baseUrlInput by remember(session.baseUrl) { mutableStateOf(session.baseUrl) }
+    var showEndpointSettings by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -320,29 +336,156 @@ private fun JubelioIntegrationTabContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
+                    if (session.lastErrorMessage.isNotBlank()) {
+                        Surface(
+                            color = Crimson100,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, Crimson600.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.ErrorOutline,
+                                        contentDescription = null,
+                                        tint = Crimson600
+                                    )
+                                    Text(
+                                        text = "Detail Kendala Koneksi Jubelio",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Crimson600
+                                    )
+                                }
+                                Text(
+                                    text = session.lastErrorMessage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Crimson600
+                                )
+                                Text(
+                                    text = "Tips: Pastikan email & password adalah akun pemilik/Open API Jubelio (bukan login Google/SSO), fitur Open API aktif pada paket Jubelio Anda, atau gunakan mode Token API Manual.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
                     if (!session.isConnected || session.isTokenLikelyExpired) {
-                        OutlinedTextField(
-                            value = emailInput,
-                            onValueChange = { emailInput = it },
-                            label = { Text("Email Akun Jubelio") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("jubelio_email_input")
-                        )
-                        OutlinedTextField(
-                            value = passwordInput,
-                            onValueChange = { passwordInput = it },
-                            label = { Text("Password Akun Jubelio") },
-                            visualTransformation = PasswordVisualTransformation(),
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("jubelio_password_input")
-                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = !useManualToken,
+                                onClick = { useManualToken = false },
+                                label = { Text("Email & Password") }
+                            )
+                            FilterChip(
+                                selected = useManualToken,
+                                onClick = { useManualToken = true },
+                                label = { Text("Token API Manual") }
+                            )
+                        }
+
+                        if (!useManualToken) {
+                            OutlinedTextField(
+                                value = emailInput,
+                                onValueChange = { emailInput = it },
+                                label = { Text("Email Akun Jubelio") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("jubelio_email_input")
+                            )
+                            OutlinedTextField(
+                                value = passwordInput,
+                                onValueChange = { passwordInput = it },
+                                label = { Text("Password Akun Jubelio") },
+                                visualTransformation = if (showPassword) {
+                                    VisualTransformation.None
+                                } else {
+                                    PasswordVisualTransformation()
+                                },
+                                trailingIcon = {
+                                    IconButton(onClick = { showPassword = !showPassword }) {
+                                        Icon(
+                                            imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                            contentDescription = if (showPassword) "Sembunyikan password" else "Lihat password"
+                                        )
+                                    }
+                                },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("jubelio_password_input")
+                            )
+                        } else {
+                            OutlinedTextField(
+                                value = manualTokenInput,
+                                onValueChange = { manualTokenInput = it },
+                                label = { Text("Bearer / JWT Token Jubelio") },
+                                placeholder = { Text("Tempel token dari Jubelio Open API...") },
+                                minLines = 2,
+                                maxLines = 4,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("jubelio_token_input")
+                            )
+                        }
+
+                        TextButton(
+                            onClick = { showEndpointSettings = !showEndpointSettings },
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                        ) {
+                            Text(
+                                text = if (showEndpointSettings) {
+                                    "Sembunyikan Pengaturan Server API"
+                                } else {
+                                    "Server API: $baseUrlInput (Ubah)"
+                                },
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+
+                        if (showEndpointSettings) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(
+                                    selected = baseUrlInput.trim() == DEFAULT_JUBELIO_BASE_URL,
+                                    onClick = { baseUrlInput = DEFAULT_JUBELIO_BASE_URL },
+                                    label = { Text("api2.jubelio.com") }
+                                )
+                                FilterChip(
+                                    selected = baseUrlInput.trim() == ALT_JUBELIO_BASE_URL,
+                                    onClick = { baseUrlInput = ALT_JUBELIO_BASE_URL },
+                                    label = { Text("api.jubelio.com") }
+                                )
+                            }
+                            OutlinedTextField(
+                                value = baseUrlInput,
+                                onValueChange = { baseUrlInput = it },
+                                label = { Text("Base URL REST API Jubelio") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
                         Button(
-                            onClick = { onLogin(emailInput, passwordInput) },
-                            enabled = !isSyncing && emailInput.isNotBlank() && passwordInput.isNotBlank(),
+                            onClick = {
+                                if (useManualToken) {
+                                    onConnectManualToken(manualTokenInput, baseUrlInput)
+                                } else {
+                                    onLogin(emailInput, passwordInput, baseUrlInput)
+                                }
+                            },
+                            enabled = !isSyncing && if (useManualToken) {
+                                manualTokenInput.isNotBlank()
+                            } else {
+                                emailInput.isNotBlank() && passwordInput.isNotBlank()
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(52.dp)
@@ -360,9 +503,16 @@ private fun JubelioIntegrationTabContent(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                             }
-                            Text("Hubungkan Akun Jubelio")
+                            Text(
+                                if (useManualToken) "Hubungkan via Token API" else "Hubungkan Akun Jubelio"
+                            )
                         }
                     } else {
+                        Text(
+                            text = "Endpoint aktif: ${session.baseUrl}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)

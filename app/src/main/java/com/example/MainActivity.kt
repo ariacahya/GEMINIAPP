@@ -408,6 +408,7 @@ private fun AuthenticatedWorkspaceShell(
                             isBusy = isBusy,
                             onMarkAlertRead = viewModel::markAlertRead,
                             onLoginJubelio = viewModel::loginJubelio,
+                            onConnectManualToken = viewModel::connectWithManualToken,
                             onSyncJubelioNow = viewModel::syncWithJubelioNow,
                             onDisconnectJubelio = viewModel::disconnectJubelio,
                             onUpdateSyncPreferences = viewModel::updateSyncPreferences,

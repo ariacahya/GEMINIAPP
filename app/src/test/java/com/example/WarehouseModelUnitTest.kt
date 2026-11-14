@@ -3,6 +3,8 @@ package com.example
 import com.example.data.model.OrderInstruction
 import com.example.data.model.OrderStatus
 import com.example.data.model.WarehouseProduct
+import com.example.data.remote.DEFAULT_JUBELIO_BASE_URL
+import com.example.data.remote.normalizeJubelioBaseUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -36,5 +38,12 @@ class WarehouseModelUnitTest {
         val order = OrderInstruction(status = OrderStatus.SIAP_DIKEMAS.name)
         assertEquals(OrderStatus.SIAP_DIKEMAS, order.statusEnum)
         assertEquals(1, order.statusEnum.stepIndex)
+    }
+
+    @Test
+    fun normalizeJubelioBaseUrl_handlesBlankSchemeAndTrailingSlash() {
+        assertEquals(DEFAULT_JUBELIO_BASE_URL, normalizeJubelioBaseUrl(""))
+        assertEquals("https://api2.jubelio.com/", normalizeJubelioBaseUrl("api2.jubelio.com"))
+        assertEquals("https://api.jubelio.com/", normalizeJubelioBaseUrl("https://api.jubelio.com"))
     }
 }
